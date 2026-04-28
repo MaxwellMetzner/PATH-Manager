@@ -25,8 +25,6 @@ class EnvStore:
         self.state = self.state_store.load()
 
     def read_raw(self, scope: Scope) -> str:
-        if scope == Scope.USER:
-            return os.environ.get("PATH", self._read_registry_path(scope))
         return self._read_registry_path(scope)
 
     def read_entries(self, scope: Scope) -> list[PathEntry]:
@@ -37,8 +35,9 @@ class EnvStore:
         for index, path in enumerate(self._split_path(raw)):
             normalized = self._normalize_path(path)
             enabled = normalized not in disabled
-            exists = os.path.isdir(path)
-            accessible = os.access(path, os.R_OK) if exists else False
+            expanded = os.path.expandvars(path)
+            exists = os.path.isdir(expanded)
+            accessible = os.access(expanded, os.R_OK) if exists else False
             entries.append(
                 PathEntry(
                     path=path,
@@ -54,8 +53,9 @@ class EnvStore:
             normalized = self._normalize_path(disabled_path)
             if normalized in {self._normalize_path(entry.path) for entry in entries}:
                 continue
-            exists = os.path.isdir(disabled_path)
-            accessible = os.access(disabled_path, os.R_OK) if exists else False
+            expanded = os.path.expandvars(disabled_path)
+            exists = os.path.isdir(expanded)
+            accessible = os.access(expanded, os.R_OK) if exists else False
             entries.append(
                 PathEntry(
                     path=disabled_path,
@@ -106,10 +106,19 @@ class EnvStore:
         self.state_store.save(self.state)
         return path
 
-    def restore_snapshot(self, snapshot_path: Path) -> None:
+    def restore_snapshot(self, snapshot_path: Path, scope: Scope | None = None) -> None:
         payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
-        self._write_registry_path(Scope.USER, payload.get("user_path", ""))
-        self._write_registry_path(Scope.SYSTEM, payload.get("system_path", ""))
+
+        self.create_snapshot("Before restore")
+
+        if scope is None:
+            self._write_registry_path(Scope.SYSTEM, payload.get("system_path", ""))
+            self._write_registry_path(Scope.USER, payload.get("user_path", ""))
+        elif scope == Scope.USER:
+            self._write_registry_path(Scope.USER, payload.get("user_path", ""))
+        else:
+            self._write_registry_path(Scope.SYSTEM, payload.get("system_path", ""))
+
         self.broadcast_environment_change()
 
     def latest_snapshots(self) -> list[Path]:
@@ -159,7 +168,7 @@ class EnvStore:
 
     @staticmethod
     def _normalize_path(path_value: str) -> str:
-        return os.path.normcase(os.path.normpath(path_value.strip().strip('"')))
+        return os.path.normcase(os.path.normpath(os.path.expandvars(path_value.strip().strip('"'))))
 
     @staticmethod
     def _read_registry_path(scope: Scope) -> str:

@@ -1,7 +1,7 @@
 [project]
 name = "path-manager"
 version = "0.1.0"
-description = "Minimal Windows PATH manager"
+description = "Windows PATH manager with diagnostics, cleanup, profiles, and snapshots"
 requires-python = ">=3.11"
 
 dependencies = []

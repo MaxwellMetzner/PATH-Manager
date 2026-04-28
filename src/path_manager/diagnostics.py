@@ -147,7 +147,11 @@ def analyze_entries(entries: Iterable[PathEntry], scope: Scope) -> list[Issue]:
 
 def detect_shadowing(entries: Iterable[PathEntry], command_names: list[str]) -> list[Issue]:
     issues: list[Issue] = []
-    enabled = [entry.path for entry in entries if entry.enabled and os.path.isdir(entry.path)]
+    enabled = [
+        os.path.expandvars(entry.path)
+        for entry in entries
+        if entry.enabled and os.path.isdir(os.path.expandvars(entry.path))
+    ]
 
     for command in command_names:
         matches = _find_command_matches(command, enabled)
@@ -163,7 +167,11 @@ def detect_shadowing(entries: Iterable[PathEntry], command_names: list[str]) -> 
 
 
 def resolve_command(command: str, entries: Iterable[PathEntry]) -> CommandResolution:
-    enabled = [entry.path for entry in entries if entry.enabled and os.path.isdir(entry.path)]
+    enabled = [
+        os.path.expandvars(entry.path)
+        for entry in entries
+        if entry.enabled and os.path.isdir(os.path.expandvars(entry.path))
+    ]
     matches = _find_command_matches(command, enabled)
     winner = matches[0] if matches else None
     return CommandResolution(command=command, winner=winner, all_matches=matches)
@@ -178,8 +186,9 @@ def _find_command_matches(command: str, directories: list[str]) -> list[str]:
 
     seen: set[str] = set()
     for folder in directories:
+        expanded_folder = os.path.expandvars(folder)
         for candidate in candidates:
-            full = os.path.join(folder, candidate)
+            full = os.path.join(expanded_folder, candidate)
             if os.path.isfile(full):
                 normalized = os.path.normcase(os.path.normpath(full))
                 if normalized not in seen:

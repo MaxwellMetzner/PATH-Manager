@@ -1,14 +1,14 @@
 # PATH Manager (Windows)
 
-Minimal desktop app to manage PATH entries with a cleaner UX than the default Environment Variables dialog.
+Desktop app for editing Windows PATH without wrestling with a semicolon-delimited registry value.
 
-PATH Manager is a Windows-focused Tkinter app for inspecting, cleaning, and editing both User and System PATH values without manually working through the registry or the stock system dialog. It keeps changes visible before you save, flags common PATH problems early, and creates a backup snapshot before every write.
+PATH Manager is a Windows-focused Tkinter app for inspecting, cleaning, and editing both User and System PATH values. It keeps changes visible before you save, flags common PATH problems, helps resolve command precedence, and creates backup snapshots before registry writes.
 
 ## What It Does
 
 - Shows PATH as a reorderable list instead of a single semicolon-delimited string
 - Lets you work against User or System scope from the same UI
-- Helps clean PATH safely with normalization, duplicate removal, missing-path cleanup, and a guided Safe Fix Pack
+- Helps clean PATH safely with normalization, duplicate removal, missing-path cleanup, and recommended fixes
 - Surfaces diagnostics for unresolved variables, risky writable folders, relative entries, and command shadowing
 - Saves backup snapshots automatically so you can undo or restore previous PATH states
 
@@ -16,24 +16,26 @@ PATH Manager is a Windows-focused Tkinter app for inspecting, cleaning, and edit
 
 - Create / Read / Edit / Delete PATH entries
 - Open target folder in Explorer or terminal
-- Reorder entries to control precedence
-- Enable/Disable entries without deleting
-- One-click normalize / remove duplicates / remove missing entries
-- Startup health scan with proposed-change preview before Safe Fix Pack
+- Reorder one or multiple entries to control precedence
+- Enable/disable entries without deleting
+- Search/filter entries with metrics for enabled, disabled, missing, issue count, and PATH length
+- Selected-entry inspector with expanded path, accessibility, writability, and per-entry issues
+- One-click normalize, remove duplicates, remove missing entries, and apply recommended fixes
+- Optional Windows core ordering helper
+- Startup health scan that surfaces available fixes without forcing a modal prompt
 - Validation for missing/inaccessible entries
 - Detection for unresolved `%VAR%` references and relative/current-directory entries
 - Risk warnings for writable folders early in PATH
 - Duplicate and command-shadow detection
-- Command resolver showing current scope, other scope, and current session winner
-- Save diff preview (added/removed/reordered)
+- Command resolver showing current scope, other scope, effective PATH, and current session winner
+- Save diff preview and effective PATH preview
 - User/System scope switching
 - Admin preflight: System Save is disabled when not elevated
 - Post-save session awareness with restart guidance for running shells/IDEs
 - Backup snapshots before every save
-- Undo/restore from snapshots
+- Undo/restore selected scope from snapshots
 - Profile import/export (JSON)
-- Search/filter entries
-- Grouped/compact actions with icon-style quick actions to reduce toolbar clutter
+- Context menu and keyboard shortcuts for common edits
 
 ## How It Works
 
