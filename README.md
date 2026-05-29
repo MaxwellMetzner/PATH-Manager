@@ -18,7 +18,7 @@ PATH Manager is a Windows-focused Tkinter app for inspecting, cleaning, and edit
 - Open target folder in Explorer or terminal
 - Reorder one or multiple entries to control precedence
 - Enable/disable entries without deleting
-- Search/filter entries with metrics for enabled, disabled, missing, issue count, and PATH length
+- Metrics for enabled, disabled, missing, issue count, and PATH length
 - Selected-entry inspector with expanded path, accessibility, writability, and per-entry issues
 - One-click normalize, remove duplicates, remove missing entries, and apply recommended fixes
 - Optional Windows core ordering helper
@@ -28,13 +28,13 @@ PATH Manager is a Windows-focused Tkinter app for inspecting, cleaning, and edit
 - Risk warnings for writable folders early in PATH
 - Duplicate and command-shadow detection
 - Command resolver showing current scope, other scope, effective PATH, and current session winner
-- Save diff preview and effective PATH preview
+- Save confirmation with a diff summary before registry writes
+- Effective PATH preview
 - User/System scope switching
-- Admin preflight: System Save is disabled when not elevated
+- System scope automatically requests Administrator elevation when selected
 - Post-save session awareness with restart guidance for running shells/IDEs
 - Backup snapshots before every save
 - Undo/restore selected scope from snapshots
-- Profile import/export (JSON)
 - Context menu and keyboard shortcuts for common edits
 
 ## How It Works
@@ -51,7 +51,7 @@ python -m pip install -e .
 python main.py
 ```
 
-> Editing **System PATH** requires running the app elevated (Administrator).
+> Selecting **System PATH** prompts for Administrator elevation.
 
 ## Notes
 

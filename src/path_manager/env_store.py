@@ -129,27 +129,6 @@ class EnvStore:
                 candidates.append(p)
         return candidates
 
-    def export_profile_payload(self) -> dict:
-        user_entries = [entry.__dict__ for entry in self.read_entries(Scope.USER)]
-        system_entries = [entry.__dict__ for entry in self.read_entries(Scope.SYSTEM)]
-        return {
-            "version": 1,
-            "created_at": datetime.now().isoformat(timespec="seconds"),
-            "user_entries": user_entries,
-            "system_entries": system_entries,
-        }
-
-    def import_profile_payload(self, payload: dict) -> tuple[list[PathEntry], list[PathEntry]]:
-        user_entries = [
-            PathEntry(path=item["path"], scope=Scope.USER, enabled=item.get("enabled", True))
-            for item in payload.get("user_entries", [])
-        ]
-        system_entries = [
-            PathEntry(path=item["path"], scope=Scope.SYSTEM, enabled=item.get("enabled", True))
-            for item in payload.get("system_entries", [])
-        ]
-        return user_entries, system_entries
-
     @staticmethod
     def broadcast_environment_change() -> None:
         ctypes.windll.user32.SendMessageTimeoutW(

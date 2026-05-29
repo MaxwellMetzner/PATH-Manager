@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 from .models import AppState
 
@@ -31,9 +30,3 @@ class StateStore:
             "recent_snapshot_files": state.recent_snapshot_files,
         }
         self.state_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-    def export_profile(self, payload: dict[str, Any], file_path: Path) -> None:
-        file_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-
-    def import_profile(self, file_path: Path) -> dict[str, Any]:
-        return json.loads(file_path.read_text(encoding="utf-8"))

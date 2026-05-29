@@ -111,10 +111,10 @@ class PathManagerApp:
 
         self.data_dir = Path(os.getenv("APPDATA", str(Path.home()))) / "PathManager"
         self.store = EnvStore(self.data_dir)
+        initial_scope = self._initial_scope_from_args()
 
-        self.scope_var = tk.StringVar(value=Scope.USER.value)
+        self.scope_var = tk.StringVar(value=initial_scope.value)
         self.scope_note_var = tk.StringVar(value="")
-        self.filter_var = tk.StringVar(value="")
         self.command_var = tk.StringVar(value="python")
         self.status_var = tk.StringVar(value="Ready")
         self.unsaved_var = tk.StringVar(value="")
@@ -128,11 +128,10 @@ class PathManagerApp:
         }
 
         self.entries: list[PathEntry] = []
-        self.filtered_indices: list[int] = []
         self.current_issues: list[Issue] = []
         self.entry_issues: dict[int, list[Issue]] = {}
         self.loaded_signature: tuple[tuple[str, bool], ...] = tuple()
-        self.last_scope = Scope.USER
+        self.last_scope = initial_scope
         self.did_startup_scan = False
 
         self._configure_styles()
@@ -180,22 +179,17 @@ class PathManagerApp:
     def _build_menus(self) -> None:
         menubar = tk.Menu(self.root)
 
-        file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Save", accelerator="Ctrl+S", command=self.save_scope)
-        file_menu.add_command(label="Reload", accelerator="F5", command=self.reload_scope)
-        file_menu.add_separator()
-        file_menu.add_command(label="Import Profile", command=self.import_profile)
-        file_menu.add_command(label="Export Profile", command=self.export_profile)
-        file_menu.add_separator()
-        file_menu.add_command(label="Restore Snapshot", command=self.restore_snapshot)
-        file_menu.add_command(label="Undo Latest Snapshot", command=self.undo)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self._on_close)
-        menubar.add_cascade(label="File", menu=file_menu)
+        self.file_menu = tk.Menu(menubar, tearoff=0)
+        self.file_menu.add_command(label="Save Changes", accelerator="Ctrl+S", command=self.save_scope)
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="Restore Snapshot", command=self.restore_snapshot)
+        self.file_menu.add_command(label="Undo Latest Snapshot", command=self.undo)
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="Exit", command=self._on_close)
+        menubar.add_cascade(label="File", menu=self.file_menu)
 
         edit_menu = tk.Menu(menubar, tearoff=0)
         edit_menu.add_command(label="Add Entry", accelerator="Ctrl+N", command=self.add_entry)
-        edit_menu.add_command(label="Add Folder", command=self.add_folder)
         edit_menu.add_command(label="Edit Selected", accelerator="Enter", command=self.edit_selected)
         edit_menu.add_command(label="Remove Selected", accelerator="Del", command=self.delete_selected)
         edit_menu.add_separator()
@@ -212,7 +206,6 @@ class PathManagerApp:
         tools_menu.add_command(label="Apply Recommended Fixes", command=self.apply_safe_fix_pack)
         tools_menu.add_command(label="Move Windows Core First", command=self.move_windows_core_first)
         tools_menu.add_separator()
-        tools_menu.add_command(label="Preview Save Diff", command=self.preview_save_diff)
         tools_menu.add_command(label="Preview Effective PATH", command=self.preview_effective_path)
         menubar.add_cascade(label="Tools", menu=tools_menu)
 
@@ -241,17 +234,18 @@ class PathManagerApp:
                 command=self._on_scope_changed,
             ).pack(side="left", padx=(0, 8))
 
-        self.admin_button = ttk.Button(header_actions, text="Run as Admin", style="Tool.TButton", command=self._try_relaunch_as_admin)
-        self.admin_button.pack(side="left", padx=(2, 12))
-        HoverTip(self.admin_button, text="Relaunch elevated so System PATH can be saved.")
+        self.scope_badge = tk.Label(
+            header_actions,
+            textvariable=self.scope_note_var,
+            background=COLORS["surface_alt"],
+            foreground=COLORS["text"],
+            padx=10,
+            pady=4,
+        )
+        self.scope_badge.pack(side="left", padx=(2, 12))
 
-        ttk.Button(header_actions, text="Reload", style="Tool.TButton", command=self.reload_scope).pack(side="left", padx=(0, 6))
-        self.preview_button = ttk.Button(header_actions, text="Preview", style="Tool.TButton", command=self.preview_save_diff)
-        self.preview_button.pack(side="left", padx=(0, 6))
         self.save_button = ttk.Button(header_actions, text="Save", style="Primary.TButton", command=self.save_scope)
         self.save_button.pack(side="left")
-
-        ttk.Label(header, textvariable=self.scope_note_var, style="Subtitle.TLabel").grid(row=1, column=1, sticky="e", pady=(4, 0))
 
         metrics = ttk.Frame(self.root, style="App.TFrame", padding=(16, 0, 16, 12))
         metrics.pack(fill="x")
@@ -316,19 +310,9 @@ class PathManagerApp:
         )
         toolbar_shell.pack(fill="x", pady=(0, 8))
 
-        search_row = ttk.Frame(toolbar_shell, style="Toolbar.TFrame", padding=(10, 10, 10, 6))
-        search_row.pack(fill="x")
-        ttk.Label(search_row, text="Search", style="SurfaceMuted.TLabel").pack(side="left", padx=(0, 8))
-        self.filter_entry = ttk.Entry(search_row, textvariable=self.filter_var)
-        self.filter_entry.pack(side="left", fill="x", expand=True)
-        self.filter_var.trace_add("write", lambda *_: self.refresh_tree())
-        ttk.Button(search_row, text="Clear", style="Tool.TButton", command=self.clear_filter).pack(side="left", padx=(8, 0))
-
-        action_row = ttk.Frame(toolbar_shell, style="Toolbar.TFrame", padding=(10, 0, 10, 10))
+        action_row = ttk.Frame(toolbar_shell, style="Toolbar.TFrame", padding=(10, 10, 10, 10))
         action_row.pack(fill="x")
 
-        self.add_folder_button = ttk.Button(action_row, text="Add Folder", style="Tool.TButton", command=self.add_folder)
-        self.add_folder_button.pack(side="left", padx=(0, 6))
         self.add_entry_button = ttk.Button(action_row, text="New Entry", style="Tool.TButton", command=self.add_entry)
         self.add_entry_button.pack(side="left", padx=(0, 6))
         self.edit_button = ttk.Button(action_row, text="Edit", style="Tool.TButton", command=self.edit_selected)
@@ -338,31 +322,10 @@ class PathManagerApp:
         self.delete_button = ttk.Button(action_row, text="Remove", style="Tool.TButton", command=self.delete_selected)
         self.delete_button.pack(side="left", padx=(0, 10))
 
-        ttk.Separator(action_row, orient="vertical").pack(side="left", fill="y", padx=(0, 10))
-        self.up_button = ttk.Button(action_row, text="Up", style="Tool.TButton", command=lambda: self.move_selected(-1))
-        self.up_button.pack(side="left", padx=(0, 6))
-        self.down_button = ttk.Button(action_row, text="Down", style="Tool.TButton", command=lambda: self.move_selected(1))
-        self.down_button.pack(side="left", padx=(0, 10))
-
-        self.clean_button = ttk.Menubutton(action_row, text="Clean Up")
-        self.clean_button.pack(side="left")
-        clean_menu = tk.Menu(self.clean_button, tearoff=0)
-        clean_menu.add_command(label="Normalize Formatting", command=self.normalize_entries)
-        clean_menu.add_command(label="Remove Duplicates", command=self.remove_duplicates)
-        clean_menu.add_command(label="Remove Missing Enabled Entries", command=self.remove_missing)
-        clean_menu.add_separator()
-        clean_menu.add_command(label="Apply Recommended Fixes", command=self.apply_safe_fix_pack)
-        clean_menu.add_command(label="Move Windows Core First", command=self.move_windows_core_first)
-        self.clean_button.configure(menu=clean_menu)
-
         self.more_button = ttk.Menubutton(action_row, text="More")
         self.more_button.pack(side="right")
         more_menu = tk.Menu(self.more_button, tearoff=0)
-        more_menu.add_command(label="Preview Save Diff", command=self.preview_save_diff)
         more_menu.add_command(label="Preview Effective PATH", command=self.preview_effective_path)
-        more_menu.add_separator()
-        more_menu.add_command(label="Import Profile", command=self.import_profile)
-        more_menu.add_command(label="Export Profile", command=self.export_profile)
         more_menu.add_separator()
         more_menu.add_command(label="Restore Snapshot", command=self.restore_snapshot)
         more_menu.add_command(label="Undo Latest Snapshot", command=self.undo)
@@ -523,18 +486,11 @@ class PathManagerApp:
     def _bind_shortcuts(self) -> None:
         self.root.bind("<Control-s>", lambda _: self._shortcut(self.save_scope))
         self.root.bind("<Control-n>", lambda _: self._shortcut(self.add_entry))
-        self.root.bind("<Control-f>", lambda _: self._focus_filter())
-        self.root.bind("<F5>", lambda _: self._shortcut(self.reload_scope))
         self.root.bind("<Alt-Up>", lambda _: self._shortcut(lambda: self.move_selected(-1)))
         self.root.bind("<Alt-Down>", lambda _: self._shortcut(lambda: self.move_selected(1)))
 
     def _shortcut(self, callback: Callable[[], object]) -> str:
         callback()
-        return "break"
-
-    def _focus_filter(self) -> str:
-        self.filter_entry.focus_set()
-        self.filter_entry.select_range(0, tk.END)
         return "break"
 
     def _on_scope_changed(self) -> None:
@@ -547,14 +503,16 @@ class PathManagerApp:
             return
 
         if next_scope == Scope.SYSTEM and not self._is_admin():
-            wants_relaunch = messagebox.askyesno(
-                "Administrator required",
-                "System PATH can be viewed now, but saving it requires Administrator rights.\n\n"
-                "Relaunch as Administrator?",
-            )
-            if wants_relaunch and self._relaunch_as_admin():
+            if self._relaunch_as_admin(target_scope=next_scope):
                 self.root.destroy()
                 return
+            self.scope_var.set(self.last_scope.value)
+            self._update_save_button_state()
+            messagebox.showwarning(
+                "Administrator required",
+                "Stayed in User PATH. Approve the administrator prompt to edit System PATH.",
+            )
+            return
 
         self.last_scope = next_scope
         self.load_scope(force=True)
@@ -595,18 +553,10 @@ class PathManagerApp:
         for item in self.tree.get_children():
             self.tree.delete(item)
 
-        query = self.filter_var.get().strip().lower()
-        self.filtered_indices = []
-
         for idx, entry in enumerate(self.entries):
             health = self._entry_health(idx)
-            expanded = os.path.expandvars(entry.path)
-            haystack = f"{entry.path} {expanded} {health}".lower()
-            if query and query not in haystack:
-                continue
 
             iid = self._iid_for_index(idx)
-            self.filtered_indices.append(idx)
             tags = (self._entry_tag(idx),)
             self.tree.insert(
                 "",
@@ -665,8 +615,6 @@ class PathManagerApp:
         self._set_widget_enabled(self.edit_button, single_selection)
         self._set_widget_enabled(self.delete_button, has_selection)
         self._set_widget_enabled(self.toggle_button, has_selection)
-        self._set_widget_enabled(self.up_button, has_selection and selected[0] > 0)
-        self._set_widget_enabled(self.down_button, has_selection and selected[-1] < len(self.entries) - 1)
         self._set_widget_enabled(self.open_button, single_selection)
         self._set_widget_enabled(self.terminal_button, single_selection)
         self._set_widget_enabled(self.copy_button, has_selection)
@@ -685,25 +633,29 @@ class PathManagerApp:
     def _update_save_button_state(self) -> None:
         dirty = self.has_unsaved_changes()
         can_write = self._can_write_current_scope()
-        self.save_button.configure(text="Save Changes" if dirty else "Saved")
+        save_enabled = dirty and can_write
+        self.save_button.configure(text="Save Changes" if dirty else "No Changes")
 
-        if dirty and can_write:
+        if save_enabled:
             self.save_button.state(["!disabled"])
         else:
             self.save_button.state(["disabled"])
 
-        self.preview_button.state(["!disabled"] if dirty else ["disabled"])
+        self.file_menu.entryconfigure(0, state="normal" if save_enabled else "disabled")
         self.unsaved_var.set("Unsaved changes" if dirty else "No unsaved changes")
 
         if self.current_scope == Scope.SYSTEM and not self._is_admin():
-            self.scope_note_var.set("System PATH is read-only until the app is elevated.")
-            self.admin_button.state(["!disabled"])
+            self.root.title("PATH Manager - System Space")
+            self.scope_note_var.set("System space - administrator required")
+            self.scope_badge.configure(background=COLORS["warning_bg"], foreground=COLORS["warning"])
         elif self.current_scope == Scope.SYSTEM:
-            self.scope_note_var.set("System PATH: administrator access detected.")
-            self.admin_button.state(["disabled"])
+            self.root.title("PATH Manager - System Space")
+            self.scope_note_var.set("System space - administrator session")
+            self.scope_badge.configure(background=COLORS["surface_alt"], foreground=COLORS["success"])
         else:
-            self.scope_note_var.set("User PATH: no elevation needed.")
-            self.admin_button.state(["!disabled"])
+            self.root.title("PATH Manager - User Space")
+            self.scope_note_var.set("User space - current account")
+            self.scope_badge.configure(background=COLORS["surface_alt"], foreground=COLORS["text"])
 
     def _update_metrics(self) -> None:
         enabled_entries = [entry for entry in self.entries if entry.enabled]
@@ -840,12 +792,6 @@ class PathManagerApp:
                 if issue_norm == entry_norm:
                     mapped[idx].append(issue)
         return mapped
-
-    def add_folder(self) -> None:
-        directory = filedialog.askdirectory(title="Add folder to PATH")
-        if not directory:
-            return
-        self._add_path_entry(directory, enabled=True)
 
     def add_entry(self) -> None:
         result = self._entry_dialog("New PATH entry", "")
@@ -1122,13 +1068,13 @@ class PathManagerApp:
             self._update_save_button_state()
             return False
 
-        if not self._confirm_save_warnings():
+        if not self._confirm_save_changes():
             return False
 
         try:
             self.store.write_entries(self.current_scope, self.entries, reason=f"Save {self.current_scope.value} PATH")
         except PermissionError:
-            messagebox.showerror("Permission required", "Run as Administrator to update System PATH.")
+            messagebox.showerror("Permission required", "Administrator approval is required to update System PATH.")
             self._update_save_button_state()
             return False
         except OSError as exc:
@@ -1140,102 +1086,11 @@ class PathManagerApp:
         self.show_session_restart_guidance()
         return True
 
-    def _confirm_save_warnings(self) -> bool:
-        missing = [entry.path for entry in self.entries if entry.enabled and not entry.exists]
-        if not missing:
-            return True
+    def _confirm_save_changes(self) -> bool:
+        body = self._format_save_confirmation()
+        return self._confirm_text_dialog("Confirm PATH Save", body, confirm_label="Save Changes")
 
-        shown = "\n".join(f"- {item}" for item in missing[:8])
-        if len(missing) > 8:
-            shown += "\n- ..."
-        return messagebox.askyesno(
-            "Save with missing entries",
-            f"{len(missing)} enabled PATH entries point to folders that do not exist.\n\n{shown}\n\nSave anyway?",
-        )
-
-    def undo(self) -> None:
-        snapshots = self.store.latest_snapshots()
-        if not snapshots:
-            messagebox.showinfo("Undo", "No snapshot available.")
-            return
-
-        latest = snapshots[0]
-        if not self._can_write_current_scope():
-            messagebox.showwarning("Administrator required", "Run as Administrator to restore System PATH.")
-            return
-
-        if not messagebox.askyesno("Undo", f"Restore {self.current_scope.value} PATH from latest snapshot?\n{latest.name}"):
-            return
-
-        try:
-            self.store.restore_snapshot(latest, scope=self.current_scope)
-        except PermissionError:
-            messagebox.showerror("Permission required", "Run as Administrator to restore System PATH.")
-            return
-
-        self.status_var.set(f"Restored {self.current_scope.value} PATH from {latest.name}")
-        self.load_scope(force=True)
-
-    def restore_snapshot(self) -> None:
-        snapshots = self.store.latest_snapshots()
-        if not snapshots:
-            messagebox.showinfo("Restore", "No snapshots found.")
-            return
-
-        if not self._can_write_current_scope():
-            messagebox.showwarning("Administrator required", "Run as Administrator to restore System PATH.")
-            return
-
-        choice = self._pick_snapshot(snapshots)
-        if choice is None:
-            return
-
-        if not messagebox.askyesno("Restore snapshot", f"Restore {self.current_scope.value} PATH from {choice.name}?"):
-            return
-
-        try:
-            self.store.restore_snapshot(choice, scope=self.current_scope)
-        except PermissionError:
-            messagebox.showerror("Permission required", "Run as Administrator to restore System PATH.")
-            return
-
-        self.status_var.set(f"Restored {self.current_scope.value} PATH from {choice.name}")
-        self.load_scope(force=True)
-
-    def export_profile(self) -> None:
-        target = filedialog.asksaveasfilename(
-            title="Export profile",
-            defaultextension=".json",
-            filetypes=[("JSON", "*.json")],
-        )
-        if not target:
-            return
-
-        payload = self.store.export_profile_payload()
-        self.store.state_store.export_profile(payload, Path(target))
-        self.status_var.set("Exported profile")
-
-    def import_profile(self) -> None:
-        if self.has_unsaved_changes() and not self._confirm_leave_dirty("import a profile"):
-            return
-
-        source = filedialog.askopenfilename(title="Import profile", filetypes=[("JSON", "*.json")])
-        if not source:
-            return
-
-        try:
-            payload = self.store.state_store.import_profile(Path(source))
-            user_entries, system_entries = self.store.import_profile_payload(payload)
-        except (OSError, KeyError, ValueError) as exc:
-            messagebox.showerror("Import failed", str(exc))
-            return
-
-        self.entries = user_entries if self.current_scope == Scope.USER else system_entries
-        for entry in self.entries:
-            entry.scope = self.current_scope
-        self._sync_view("Imported profile into editor; save to apply")
-
-    def preview_save_diff(self) -> None:
+    def _format_save_confirmation(self) -> str:
         before_entries = self.store.read_entries(self.current_scope)
         before = [entry.path.strip().strip('"') for entry in before_entries if entry.enabled and entry.path.strip()]
         after = [entry.path.strip().strip('"') for entry in self.entries if entry.enabled and entry.path.strip()]
@@ -1250,10 +1105,18 @@ class PathManagerApp:
 
         index_before = {norm: idx for idx, norm in enumerate(before_norm)}
         moved = sum(1 for idx, norm in enumerate(after_norm) if norm in index_before and index_before[norm] != idx)
+        row_changes = self._count_signature_changes(self._entry_signature(before_entries), self._entry_signature(self.entries))
+        missing = [entry.path for entry in self.entries if entry.enabled and not entry.exists]
 
         lines = [
-            f"Scope: {self.current_scope.value}",
-            f"Active entries now: {len(after)}",
+            f"Scope: {self.current_scope.value} PATH",
+            f"App space: {'System administrator session' if self.current_scope == Scope.SYSTEM else 'User account session'}",
+            "",
+            f"Editor rows: {len(before_entries)} -> {len(self.entries)}",
+            f"Enabled rows: {sum(1 for entry in before_entries if entry.enabled)} -> {sum(1 for entry in self.entries if entry.enabled)}",
+            f"Changed rows: {row_changes}",
+            "",
+            "Active PATH diff:",
             f"Added: {len(added)}",
             f"Removed: {len(removed)}",
             f"Reordered: {moved}",
@@ -1261,20 +1124,92 @@ class PathManagerApp:
         ]
 
         if not added and not removed and not moved:
-            lines.append("No active PATH changes detected.")
+            lines.append("No active PATH value changes detected.")
+
         if added:
             lines.append("Added:")
             lines.extend(f"+ {item}" for item in added[:24])
             if len(added) > 24:
                 lines.append("+ ...")
             lines.append("")
+
         if removed:
             lines.append("Removed:")
             lines.extend(f"- {item}" for item in removed[:24])
             if len(removed) > 24:
                 lines.append("- ...")
+            lines.append("")
 
-        self._show_text_dialog("Save Preview", "\n".join(lines))
+        if missing:
+            lines.append("Warning:")
+            lines.append(f"{len(missing)} enabled PATH entries point to folders that do not exist.")
+            lines.extend(f"- {item}" for item in missing[:8])
+            if len(missing) > 8:
+                lines.append("- ...")
+            lines.append("")
+
+        lines.append("Save these changes to the Windows registry?")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _count_signature_changes(before: tuple[tuple[str, bool], ...], after: tuple[tuple[str, bool], ...]) -> int:
+        total = max(len(before), len(after))
+        changes = 0
+        for idx in range(total):
+            before_item = before[idx] if idx < len(before) else None
+            after_item = after[idx] if idx < len(after) else None
+            if before_item != after_item:
+                changes += 1
+        return changes
+
+    def undo(self) -> None:
+        snapshots = self.store.latest_snapshots()
+        if not snapshots:
+            messagebox.showinfo("Undo", "No snapshot available.")
+            return
+
+        latest = snapshots[0]
+        if not self._can_write_current_scope():
+            messagebox.showwarning("Administrator required", "Administrator approval is required to restore System PATH.")
+            return
+
+        if not messagebox.askyesno("Undo", f"Restore {self.current_scope.value} PATH from latest snapshot?\n{latest.name}"):
+            return
+
+        try:
+            self.store.restore_snapshot(latest, scope=self.current_scope)
+        except PermissionError:
+            messagebox.showerror("Permission required", "Administrator approval is required to restore System PATH.")
+            return
+
+        self.status_var.set(f"Restored {self.current_scope.value} PATH from {latest.name}")
+        self.load_scope(force=True)
+
+    def restore_snapshot(self) -> None:
+        snapshots = self.store.latest_snapshots()
+        if not snapshots:
+            messagebox.showinfo("Restore", "No snapshots found.")
+            return
+
+        if not self._can_write_current_scope():
+            messagebox.showwarning("Administrator required", "Administrator approval is required to restore System PATH.")
+            return
+
+        choice = self._pick_snapshot(snapshots)
+        if choice is None:
+            return
+
+        if not messagebox.askyesno("Restore snapshot", f"Restore {self.current_scope.value} PATH from {choice.name}?"):
+            return
+
+        try:
+            self.store.restore_snapshot(choice, scope=self.current_scope)
+        except PermissionError:
+            messagebox.showerror("Permission required", "Administrator approval is required to restore System PATH.")
+            return
+
+        self.status_var.set(f"Restored {self.current_scope.value} PATH from {choice.name}")
+        self.load_scope(force=True)
 
     def preview_effective_path(self) -> None:
         user_entries = self.entries if self.current_scope == Scope.USER else self.store.read_entries(Scope.USER)
@@ -1381,10 +1316,6 @@ class PathManagerApp:
         self.root.clipboard_clear()
         self.root.clipboard_append(value)
         self.status_var.set(f"Copied {len(selected)} PATH entries")
-
-    def clear_filter(self) -> None:
-        self.filter_var.set("")
-        self.filter_entry.focus_set()
 
     def auto_health_scan(self) -> None:
         if self.did_startup_scan:
@@ -1597,15 +1528,22 @@ class PathManagerApp:
             return
         self.root.destroy()
 
-    def _try_relaunch_as_admin(self) -> None:
-        if self._relaunch_as_admin():
-            self.root.destroy()
-            return
-        messagebox.showwarning("Relaunch failed", "Could not relaunch as Administrator.")
+    @staticmethod
+    def _initial_scope_from_args() -> Scope:
+        for arg in sys.argv[1:]:
+            lowered = arg.lower()
+            if lowered in {"--system", "--scope=system", "/system"}:
+                return Scope.SYSTEM
+            if lowered in {"--user", "--scope=user", "/user"}:
+                return Scope.USER
+        return Scope.USER
 
-    def _relaunch_as_admin(self) -> bool:
+    def _relaunch_as_admin(self, target_scope: Scope | None = None) -> bool:
         script_path = Path(sys.argv[0]).resolve()
-        params = f'"{script_path}"'
+        args = [f'"{script_path}"']
+        if target_scope is not None:
+            args.append(f"--scope={target_scope.value}")
+        params = " ".join(args)
         try:
             result = ctypes.windll.shell32.ShellExecuteW(
                 None,
