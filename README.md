@@ -7,7 +7,7 @@ PATH Manager is a Windows-focused Tkinter app for inspecting, cleaning, and edit
 ## What It Does
 
 - Shows PATH as a reorderable list instead of a single semicolon-delimited string
-- Lets you work against User or System scope from the same UI
+- Separates **My PATH** (the account running the app) from **All users (System)** PATH
 - Helps clean PATH safely with normalization, duplicate removal, missing-path cleanup, and recommended fixes
 - Surfaces diagnostics for unresolved variables, risky writable folders, relative entries, and command shadowing
 - Saves backup snapshots automatically so you can undo or restore previous PATH states
@@ -29,9 +29,10 @@ PATH Manager is a Windows-focused Tkinter app for inspecting, cleaning, and edit
 - Duplicate and command-shadow detection
 - Command resolver showing current scope, other scope, effective PATH, and current session winner
 - Save confirmation with a diff summary before registry writes
-- Effective PATH preview
-- User/System scope switching
-- System scope automatically requests Administrator elevation when selected
+- Read-only combined PATH tab with order numbers and scope labels; includes unsaved edits and excludes disabled entries
+- Folder search, visible reorder controls, and full issue explanations with double-click navigation to the affected folder
+- User/System scope switching with explicit impact descriptions
+- Browse System PATH without elevation; explicitly unlock system editing when needed
 - Post-save session awareness with restart guidance for running shells/IDEs
 - Backup snapshots before every save
 - Undo/restore selected scope from snapshots
@@ -51,7 +52,30 @@ python -m pip install -e .
 python main.py
 ```
 
-> Selecting **System PATH** prompts for Administrator elevation.
+## Using the interface
+
+- **My PATH** is for personal tools and affects only the Windows account running PATH Manager.
+- **All users (System)** is shared across accounts. It opens read-only in a non-administrator session.
+  Choose **Unlock system editing...** to restart with Administrator permission.
+  If elevation uses another account's credentials, **My PATH** in that elevated app belongs to that account.
+- **Folders** shows the selected scope. Search narrows the display, not the saved list; order numbers
+  still refer to the full list. Use **Tools** for cleanup and snapshot restore.
+- **Combined PATH (read-only)** shows System folders followed by My PATH. Moving a personal folder
+  to the top of My PATH does not place it ahead of System folders. This is a PATH-only preview;
+  shells may have aliases, extra search locations, or a different inherited environment.
+- **Health** explains warnings; double-click an issue to locate its folder. **Folder details** shows
+  expanded paths and permissions. **Find command** compares both scopes, the combined preview,
+  and this app's inherited environment.
+- **Save User PATH** or **Save System PATH** reviews and writes only the selected scope.
+  Editing, cleanup, and reordering do not write to the registry until you save.
+
+## Tests
+
+```powershell
+python -m unittest discover -s tests -v
+```
+
+The UI tests require Windows with Tkinter. They use a mocked environment store and do not write PATH registry values.
 
 ## Notes
 

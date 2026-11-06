@@ -115,6 +115,10 @@ class PathManagerApp:
 
         self.scope_var = tk.StringVar(value=initial_scope.value)
         self.scope_note_var = tk.StringVar(value="")
+        self.scope_description_var = tk.StringVar(value="")
+        self.table_title_var = tk.StringVar(value="")
+        self.filter_var = tk.StringVar(value="")
+        self.combined_note_var = tk.StringVar(value="")
         self.command_var = tk.StringVar(value="python")
         self.status_var = tk.StringVar(value="Ready")
         self.unsaved_var = tk.StringVar(value="")
@@ -133,6 +137,7 @@ class PathManagerApp:
         self.loaded_signature: tuple[tuple[str, bool], ...] = tuple()
         self.last_scope = initial_scope
         self.did_startup_scan = False
+        self.edit_widgets: list[ttk.Widget] = []
 
         self._configure_styles()
         self._build_menus()
@@ -167,8 +172,8 @@ class PathManagerApp:
         style.configure("TButton", padding=(10, 6))
         style.configure("Primary.TButton", padding=(12, 7), foreground="#ffffff", background=COLORS["accent"])
         style.map("Primary.TButton", background=[("active", COLORS["accent_dark"]), ("disabled", COLORS["border"])])
-        style.configure("Tool.TButton", padding=(8, 5))
-        style.configure("TMenubutton", padding=(10, 6))
+        style.configure("Tool.TButton", padding=(8, 5), width=0)
+        style.configure("TMenubutton", padding=(10, 6), width=0)
         style.configure("Treeview", rowheight=28, background=COLORS["surface"], fieldbackground=COLORS["surface"])
         style.configure("Treeview.Heading", font=("Segoe UI", 9, "bold"), padding=(6, 6))
         style.configure("TNotebook", background=COLORS["bg"], borderwidth=0)
@@ -188,7 +193,7 @@ class PathManagerApp:
         self.file_menu.add_command(label="Exit", command=self._on_close)
         menubar.add_cascade(label="File", menu=self.file_menu)
 
-        edit_menu = tk.Menu(menubar, tearoff=0)
+        edit_menu = self.edit_menu = tk.Menu(menubar, tearoff=0)
         edit_menu.add_command(label="Add Entry", accelerator="Ctrl+N", command=self.add_entry)
         edit_menu.add_command(label="Edit Selected", accelerator="Enter", command=self.edit_selected)
         edit_menu.add_command(label="Remove Selected", accelerator="Del", command=self.delete_selected)
@@ -198,7 +203,7 @@ class PathManagerApp:
         edit_menu.add_command(label="Move Down", accelerator="Alt+Down", command=lambda: self.move_selected(1))
         menubar.add_cascade(label="Edit", menu=edit_menu)
 
-        tools_menu = tk.Menu(menubar, tearoff=0)
+        tools_menu = self.tools_menu = tk.Menu(menubar, tearoff=0)
         tools_menu.add_command(label="Normalize Formatting", command=self.normalize_entries)
         tools_menu.add_command(label="Remove Duplicates", command=self.remove_duplicates)
         tools_menu.add_command(label="Remove Missing Enabled Entries", command=self.remove_missing)
@@ -219,30 +224,37 @@ class PathManagerApp:
         title_area = ttk.Frame(header, style="App.TFrame")
         title_area.grid(row=0, column=0, sticky="w")
         ttk.Label(title_area, text="PATH Manager", style="Title.TLabel").pack(anchor="w")
-        ttk.Label(title_area, text="Windows PATH editor", style="Subtitle.TLabel").pack(anchor="w", pady=(1, 0))
+        ttk.Label(title_area, text="Choose where a folder belongs. Review changes before saving.", style="Subtitle.TLabel").pack(
+            anchor="w", pady=(1, 0)
+        )
 
         header_actions = ttk.Frame(header, style="App.TFrame")
         header_actions.grid(row=0, column=1, sticky="e")
 
-        ttk.Label(header_actions, text="Scope", style="Muted.TLabel").pack(side="left", padx=(0, 8))
-        for scope in (Scope.USER, Scope.SYSTEM):
+        for scope, label in ((Scope.USER, "My PATH"), (Scope.SYSTEM, "All users (System)")):
             ttk.Radiobutton(
                 header_actions,
-                text=scope.value,
+                text=label,
                 value=scope.value,
                 variable=self.scope_var,
                 command=self._on_scope_changed,
             ).pack(side="left", padx=(0, 8))
 
+        scope_panel = ttk.Frame(self.root, style="Surface.TFrame", padding=(16, 10))
+        scope_panel.pack(fill="x", padx=16, pady=(0, 10))
         self.scope_badge = tk.Label(
-            header_actions,
+            scope_panel,
             textvariable=self.scope_note_var,
             background=COLORS["surface_alt"],
             foreground=COLORS["text"],
             padx=10,
             pady=4,
         )
-        self.scope_badge.pack(side="left", padx=(2, 12))
+        self.scope_badge.pack(side="left", padx=(0, 12))
+        ttk.Label(scope_panel, textvariable=self.scope_description_var, style="SurfaceMuted.TLabel",
+                  wraplength=450).pack(side="left", fill="x", expand=True)
+        self.unlock_button = ttk.Button(scope_panel, text="Unlock system editing...",
+                                        command=self.unlock_system_editing)
 
         self.save_button = ttk.Button(header_actions, text="Save", style="Primary.TButton", command=self.save_scope)
         self.save_button.pack(side="left")
@@ -266,7 +278,14 @@ class PathManagerApp:
         content.add(left, weight=5)
         content.add(right, weight=2)
 
-        self._build_path_table(left)
+        self.workspace = ttk.Notebook(left)
+        self.workspace.pack(fill="both", expand=True)
+        editor = ttk.Frame(self.workspace, style="App.TFrame", padding=(0, 8, 0, 0))
+        combined = ttk.Frame(self.workspace, style="Surface.TFrame", padding=10)
+        self.workspace.add(editor, text="Folders")
+        self.workspace.add(combined, text="Combined PATH (read-only)")
+        self._build_path_table(editor)
+        self._build_combined_view(combined)
         self._build_side_panel(right)
 
         footer = ttk.Frame(self.root, style="App.TFrame", padding=(16, 0, 16, 12))
@@ -288,9 +307,9 @@ class PathManagerApp:
             textvariable=self.metric_vars[key],
             background=COLORS["surface"],
             foreground=COLORS["text"],
-            font=("Segoe UI", 18, "bold"),
+            font=("Segoe UI", 12, "bold"),
             anchor="w",
-        ).pack(fill="x", padx=12, pady=(9, 0))
+        ).pack(side="left", padx=(10, 5), pady=7)
         tk.Label(
             card,
             text=label,
@@ -298,7 +317,32 @@ class PathManagerApp:
             foreground=COLORS["muted"],
             font=("Segoe UI", 9),
             anchor="w",
-        ).pack(fill="x", padx=12, pady=(0, 10))
+        ).pack(side="left", padx=(0, 10), pady=7)
+
+    def _build_combined_view(self, parent: tk.Misc) -> None:
+        ttk.Label(parent, text="How Windows searches these folders", style="Surface.TLabel",
+                  font=("Segoe UI", 12, "bold")).pack(anchor="w")
+        ttk.Label(parent, textvariable=self.combined_note_var, style="SurfaceMuted.TLabel",
+                  wraplength=650).pack(fill="x", pady=(6, 10))
+        shell = ttk.Frame(parent, style="Surface.TFrame")
+        shell.pack(fill="both", expand=True)
+        shell.rowconfigure(0, weight=1)
+        shell.columnconfigure(0, weight=1)
+        self.combined_tree = ttk.Treeview(shell, columns=("order", "scope", "path"),
+                                         show="headings", selectmode="browse")
+        for column, label, width in (("order", "#", 45), ("scope", "Belongs to", 130), ("path", "Folder", 500)):
+            self.combined_tree.heading(column, text=label)
+            self.combined_tree.column(column, width=width, minwidth=width if column != "path" else 200,
+                                      stretch=column == "path")
+        self.combined_tree.grid(row=0, column=0, sticky="nsew")
+        scroll = ttk.Scrollbar(shell, orient="vertical", command=self.combined_tree.yview)
+        scroll.grid(row=0, column=1, sticky="ns")
+        horizontal = ttk.Scrollbar(shell, orient="horizontal", command=self.combined_tree.xview)
+        horizontal.grid(row=1, column=0, sticky="ew")
+        self.combined_tree.configure(yscrollcommand=scroll.set, xscrollcommand=horizontal.set)
+        self.combined_tree.tag_configure("system", background=COLORS["surface_alt"])
+        ttk.Label(parent, text="Only enabled folders are included. Edit each list separately; no folders are moved between scopes.",
+                  style="SurfaceMuted.TLabel", wraplength=650).pack(fill="x", pady=(10, 0))
 
     def _build_path_table(self, parent: tk.Misc) -> None:
         toolbar_shell = tk.Frame(
@@ -309,6 +353,19 @@ class PathManagerApp:
             bd=0,
         )
         toolbar_shell.pack(fill="x", pady=(0, 8))
+
+        heading = ttk.Frame(toolbar_shell, style="Toolbar.TFrame", padding=(10, 10, 10, 0))
+        heading.pack(fill="x")
+        ttk.Label(heading, textvariable=self.table_title_var, style="Surface.TLabel",
+                  font=("Segoe UI", 11, "bold")).pack(side="left")
+        ttk.Button(heading, text="Reload", style="Tool.TButton", command=self.reload_scope).pack(side="right")
+        search_row = ttk.Frame(toolbar_shell, style="Toolbar.TFrame", padding=(10, 8, 10, 0))
+        search_row.pack(fill="x")
+        ttk.Label(search_row, text="Find folder", style="SurfaceMuted.TLabel").pack(side="left", padx=(0, 8))
+        ttk.Entry(search_row, textvariable=self.filter_var).pack(side="left", fill="x", expand=True)
+        ttk.Button(search_row, text="Clear", style="Tool.TButton",
+                   command=lambda: self.filter_var.set("")).pack(side="left", padx=(6, 0))
+        self.filter_var.trace_add("write", lambda *_: self._filter_changed())
 
         action_row = ttk.Frame(toolbar_shell, style="Toolbar.TFrame", padding=(10, 10, 10, 10))
         action_row.pack(fill="x")
@@ -321,15 +378,25 @@ class PathManagerApp:
         self.toggle_button.pack(side="left", padx=(0, 6))
         self.delete_button = ttk.Button(action_row, text="Remove", style="Tool.TButton", command=self.delete_selected)
         self.delete_button.pack(side="left", padx=(0, 10))
+        self.up_button = ttk.Button(action_row, text="Up", style="Tool.TButton", command=lambda: self.move_selected(-1))
+        self.up_button.pack(side="left", padx=(0, 6))
+        self.down_button = ttk.Button(action_row, text="Down", style="Tool.TButton", command=lambda: self.move_selected(1))
+        self.down_button.pack(side="left")
+        self.edit_widgets.append(self.add_entry_button)
 
-        self.more_button = ttk.Menubutton(action_row, text="More")
+        self.more_button = ttk.Menubutton(action_row, text="Tools")
         self.more_button.pack(side="right")
         more_menu = tk.Menu(self.more_button, tearoff=0)
-        more_menu.add_command(label="Preview Effective PATH", command=self.preview_effective_path)
+        more_menu.add_command(label="Review cleanup...", command=self.apply_safe_fix_pack)
+        more_menu.add_command(label="Normalize formatting", command=self.normalize_entries)
+        more_menu.add_command(label="Remove duplicates", command=self.remove_duplicates)
+        more_menu.add_command(label="Remove missing folders", command=self.remove_missing)
+        more_menu.add_command(label="Windows core folders first...", command=self.move_windows_core_first)
         more_menu.add_separator()
         more_menu.add_command(label="Restore Snapshot", command=self.restore_snapshot)
         more_menu.add_command(label="Undo Latest Snapshot", command=self.undo)
         self.more_button.configure(menu=more_menu)
+        self.edit_widgets.append(self.more_button)
 
         table_shell = tk.Frame(
             parent,
@@ -346,17 +413,22 @@ class PathManagerApp:
         self.tree = ttk.Treeview(table_shell, columns=columns, show="headings", selectmode="extended")
         self.tree.heading("order", text="#")
         self.tree.heading("state", text="State")
-        self.tree.heading("path", text="Path")
+        self.tree.heading("path", text="Folder")
         self.tree.heading("health", text="Health")
         self.tree.column("order", width=54, minwidth=46, anchor="center", stretch=False)
         self.tree.column("state", width=78, minwidth=70, anchor="center", stretch=False)
-        self.tree.column("path", width=660, minwidth=320, anchor="w")
+        self.tree.column("path", width=400, minwidth=200, anchor="w")
         self.tree.column("health", width=130, minwidth=110, anchor="center", stretch=False)
         self.tree.grid(row=0, column=0, sticky="nsew")
 
         scroll = ttk.Scrollbar(table_shell, orient="vertical", command=self.tree.yview)
         scroll.grid(row=0, column=1, sticky="ns")
         self.tree.configure(yscrollcommand=scroll.set)
+        horizontal = ttk.Scrollbar(table_shell, orient="horizontal", command=self.tree.xview)
+        horizontal.grid(row=1, column=0, sticky="ew")
+        self.tree.configure(xscrollcommand=horizontal.set)
+        ttk.Label(parent, text="Folders higher in this list are searched first within this scope.",
+                  style="Muted.TLabel").pack(anchor="w", pady=(6, 0))
 
         self.tree.tag_configure("ready", foreground=COLORS["text"])
         self.tree.tag_configure("disabled", foreground=COLORS["muted"])
@@ -381,9 +453,9 @@ class PathManagerApp:
         selected = ttk.Frame(self.notebook, style="Surface.TFrame", padding=10)
         command = ttk.Frame(self.notebook, style="Surface.TFrame", padding=10)
 
-        self.notebook.add(overview, text="Overview")
-        self.notebook.add(selected, text="Selected")
-        self.notebook.add(command, text="Command")
+        self.notebook.add(overview, text="Health")
+        self.notebook.add(selected, text="Folder details")
+        self.notebook.add(command, text="Find command")
 
         ttk.Label(overview, textvariable=self.health_summary_var, style="Surface.TLabel", font=("Segoe UI", 11, "bold")).pack(
             anchor="w", pady=(0, 8)
@@ -394,14 +466,12 @@ class PathManagerApp:
         issue_shell.rowconfigure(0, weight=1)
         issue_shell.columnconfigure(0, weight=1)
 
-        issue_columns = ("severity", "issue", "path")
+        issue_columns = ("severity", "issue")
         self.issue_tree = ttk.Treeview(issue_shell, columns=issue_columns, show="headings", selectmode="browse", height=8)
         self.issue_tree.heading("severity", text="Severity")
         self.issue_tree.heading("issue", text="Issue")
-        self.issue_tree.heading("path", text="Path")
         self.issue_tree.column("severity", width=76, stretch=False)
-        self.issue_tree.column("issue", width=210, minwidth=160)
-        self.issue_tree.column("path", width=260, minwidth=140)
+        self.issue_tree.column("issue", width=230, minwidth=160)
         self.issue_tree.grid(row=0, column=0, sticky="nsew")
         issue_scroll = ttk.Scrollbar(issue_shell, orient="vertical", command=self.issue_tree.yview)
         issue_scroll.grid(row=0, column=1, sticky="ns")
@@ -409,14 +479,21 @@ class PathManagerApp:
         self.issue_tree.tag_configure("warning", foreground=COLORS["warning"])
         self.issue_tree.tag_configure("info", foreground=COLORS["accent"])
 
-        quick_fixes = ttk.LabelFrame(overview, text="Fixes", padding=8)
+        self.issue_detail = tk.Text(overview, wrap="word", width=32, height=5, relief="flat",
+                                    background=COLORS["surface_alt"], foreground=COLORS["text"], padx=8, pady=8)
+        self.issue_detail.pack(fill="x", pady=(8, 0))
+        self.issue_detail.configure(state="disabled")
+        self.issue_tree.bind("<<TreeviewSelect>>", lambda _: self._show_issue_details())
+        self.issue_tree.bind("<Double-1>", lambda _: self._select_issue_entry())
+        quick_fixes = ttk.LabelFrame(overview, text="Cleanup this scope", padding=8)
         quick_fixes.pack(fill="x", pady=(10, 0))
-        ttk.Button(quick_fixes, text="Recommended", style="Tool.TButton", command=self.apply_safe_fix_pack).pack(
-            side="left", padx=(0, 6)
+        cleanup_button = ttk.Button(quick_fixes, text="Review recommended fixes...", style="Tool.TButton",
+                                    command=self.apply_safe_fix_pack)
+        cleanup_button.pack(fill="x")
+        self.edit_widgets.append(cleanup_button)
+        ttk.Label(quick_fixes, text="Changes stay in the editor until you save.", style="SurfaceMuted.TLabel").pack(
+            anchor="w", pady=(6, 0)
         )
-        ttk.Button(quick_fixes, text="Duplicates", style="Tool.TButton", command=self.remove_duplicates).pack(side="left", padx=(0, 6))
-        ttk.Button(quick_fixes, text="Missing", style="Tool.TButton", command=self.remove_missing).pack(side="left", padx=(0, 6))
-        ttk.Button(quick_fixes, text="Normalize", style="Tool.TButton", command=self.normalize_entries).pack(side="left")
 
         selected_actions = ttk.Frame(selected, style="Surface.TFrame")
         selected_actions.pack(fill="x", pady=(0, 8))
@@ -430,6 +507,7 @@ class PathManagerApp:
         self.detail_text = tk.Text(
             selected,
             wrap="word",
+            width=32,
             height=12,
             relief="flat",
             highlightthickness=1,
@@ -443,6 +521,8 @@ class PathManagerApp:
         self.detail_text.configure(state="disabled")
 
         command_row = ttk.Frame(command, style="Surface.TFrame")
+        ttk.Label(command, text="Compare My PATH, System PATH, and this app's inherited environment.",
+                  style="SurfaceMuted.TLabel", wraplength=300).pack(fill="x", pady=(0, 8))
         command_row.pack(fill="x")
         self.command_entry = ttk.Entry(command_row, textvariable=self.command_var)
         self.command_entry.pack(side="left", fill="x", expand=True)
@@ -451,14 +531,17 @@ class PathManagerApp:
 
         command_quick = ttk.Frame(command, style="Surface.TFrame")
         command_quick.pack(fill="x", pady=(8, 8))
-        for name in COMMON_COMMANDS:
-            ttk.Button(command_quick, text=name, style="Tool.TButton", command=lambda value=name: self._quick_command(value)).pack(
-                side="left", padx=(0, 6)
+        for index, name in enumerate(COMMON_COMMANDS):
+            ttk.Button(command_quick, text=name, style="Tool.TButton", command=lambda value=name: self._quick_command(value)).grid(
+                row=index // 3, column=index % 3, sticky="ew", padx=(0, 4), pady=(0, 4)
             )
+        for column in range(3):
+            command_quick.columnconfigure(column, weight=1)
 
         self.tester_output = tk.Text(
             command,
             wrap="word",
+            width=32,
             relief="flat",
             highlightthickness=1,
             highlightbackground=COLORS["border"],
@@ -498,24 +581,40 @@ class PathManagerApp:
         if next_scope == self.last_scope:
             return
 
+        self.scope_var.set(self.last_scope.value)
         if self.has_unsaved_changes() and not self._confirm_leave_dirty("switch scope"):
-            self.scope_var.set(self.last_scope.value)
             return
 
-        if next_scope == Scope.SYSTEM and not self._is_admin():
-            if self._relaunch_as_admin(target_scope=next_scope):
-                self.root.destroy()
-                return
+        self.scope_var.set(next_scope.value)
+        if self.load_scope(force=True):
+            self.last_scope = next_scope
+            self.filter_var.set("")
+        else:
             self.scope_var.set(self.last_scope.value)
             self._update_save_button_state()
-            messagebox.showwarning(
-                "Administrator required",
-                "Stayed in User PATH. Approve the administrator prompt to edit System PATH.",
-            )
-            return
 
-        self.last_scope = next_scope
-        self.load_scope(force=True)
+    def unlock_system_editing(self) -> None:
+        if self.current_scope != Scope.SYSTEM or self._is_admin():
+            return
+        if not messagebox.askyesno(
+            "Edit PATH for all users",
+            "System PATH affects every account on this computer.\n\n"
+            "Restart PATH Manager with administrator permission to edit it? "
+            "If Windows asks for another account's credentials, My PATH in the elevated app belongs to that account.",
+        ):
+            return
+        if self._relaunch_as_admin(target_scope=Scope.SYSTEM):
+            self.root.destroy()
+        else:
+            messagebox.showwarning("System PATH remains read-only",
+                                   "Administrator approval was not granted. You can still inspect System PATH.")
+
+    def _require_editable(self) -> bool:
+        if self._can_write_current_scope():
+            self.workspace.select(0)
+            return True
+        self.status_var.set("System PATH is read-only. Use 'Unlock system editing' to make changes.")
+        return False
 
     def load_scope(self, force: bool = False) -> bool:
         if not force and self.has_unsaved_changes() and not self._confirm_leave_dirty("reload"):
@@ -523,8 +622,8 @@ class PathManagerApp:
 
         try:
             self.entries = self.store.read_entries(self.current_scope)
-        except PermissionError:
-            messagebox.showerror("Permission required", "This PATH scope could not be read.")
+        except OSError as exc:
+            messagebox.showerror("Could not read PATH", str(exc))
             return False
 
         self.loaded_signature = self._entry_signature(self.entries)
@@ -542,6 +641,9 @@ class PathManagerApp:
         self._update_details()
         self._update_action_state()
         self._update_save_button_state()
+        self._refresh_combined_view()
+        self._set_text(self.tester_output, "Enter a command or choose a shortcut to compare both scopes.\n\n"
+                       "The combined preview includes unsaved edits; this app's environment does not.")
         if status is not None:
             self.status_var.set(status)
 
@@ -554,6 +656,8 @@ class PathManagerApp:
             self.tree.delete(item)
 
         for idx, entry in enumerate(self.entries):
+            if self.filter_var.get().strip().casefold() not in entry.path.casefold():
+                continue
             health = self._entry_health(idx)
 
             iid = self._iid_for_index(idx)
@@ -562,11 +666,43 @@ class PathManagerApp:
                 "",
                 "end",
                 iid=iid,
-                values=(idx + 1, "On" if entry.enabled else "Off", entry.path, health),
+                values=(idx + 1, "Enabled" if entry.enabled else "Disabled", entry.path, health),
                 tags=tags,
             )
             if idx in previous:
                 self.tree.selection_add(iid)
+
+    def _filter_changed(self) -> None:
+        self.refresh_tree()
+        self._on_selection_changed()
+
+    def _scope_entries(self) -> tuple[list[PathEntry], list[PathEntry]]:
+        other_scope = Scope.SYSTEM if self.current_scope == Scope.USER else Scope.USER
+        other_entries = self.store.read_entries(other_scope)
+        if self.current_scope == Scope.USER:
+            return self.entries, other_entries
+        return other_entries, self.entries
+
+    def _refresh_combined_view(self) -> None:
+        self.combined_tree.delete(*self.combined_tree.get_children())
+        try:
+            user_entries, system_entries = self._scope_entries()
+        except OSError as exc:
+            self.combined_note_var.set(f"Could not read the other PATH scope: {exc}")
+            return
+        dirty_note = " Includes unsaved edits to this scope." if self.has_unsaved_changes() else ""
+        self.combined_note_var.set(
+            "PATH-only preview: System folders first, then My PATH. Earlier matches take precedence."
+            + dirty_note + " Running shells may use a different inherited PATH or shell-specific resolution."
+        )
+        for entry in system_entries + user_entries:
+            if not entry.enabled or not entry.path.strip():
+                continue
+            self.combined_tree.insert("", "end", values=(
+                len(self.combined_tree.get_children()) + 1,
+                "All users" if entry.scope == Scope.SYSTEM else "My PATH",
+                entry.path,
+            ), tags=("system",) if entry.scope == Scope.SYSTEM else ())
 
     def selected_model_indices(self) -> list[int]:
         if not hasattr(self, "tree"):
@@ -609,12 +745,26 @@ class PathManagerApp:
 
     def _update_action_state(self) -> None:
         selected = self.selected_model_indices()
+        editable = self._can_write_current_scope()
         has_selection = bool(selected)
         single_selection = len(selected) == 1
 
-        self._set_widget_enabled(self.edit_button, single_selection)
-        self._set_widget_enabled(self.delete_button, has_selection)
-        self._set_widget_enabled(self.toggle_button, has_selection)
+        self._set_widget_enabled(self.edit_button, single_selection and editable)
+        self._set_widget_enabled(self.delete_button, has_selection and editable)
+        self._set_widget_enabled(self.toggle_button, has_selection and editable)
+        self._set_widget_enabled(self.up_button, has_selection and editable and selected[0] > 0)
+        self._set_widget_enabled(self.down_button, has_selection and editable and selected[-1] < len(self.entries) - 1)
+        for widget in self.edit_widgets:
+            self._set_widget_enabled(widget, editable)
+        for index in (0, 1, 2, 4, 5):
+            self.context_menu.entryconfigure(index, state="normal" if editable else "disabled")
+        self.edit_menu.configure(postcommand=lambda: self._update_action_state())
+        for index in (0, 1, 2, 4, 5, 6):
+            self.edit_menu.entryconfigure(index, state="normal" if editable else "disabled")
+        for index in (0, 1, 2, 4, 5):
+            self.tools_menu.entryconfigure(index, state="normal" if editable else "disabled")
+        for index in (2, 3):
+            self.file_menu.entryconfigure(index, state="normal" if editable else "disabled")
         self._set_widget_enabled(self.open_button, single_selection)
         self._set_widget_enabled(self.terminal_button, single_selection)
         self._set_widget_enabled(self.copy_button, has_selection)
@@ -634,7 +784,7 @@ class PathManagerApp:
         dirty = self.has_unsaved_changes()
         can_write = self._can_write_current_scope()
         save_enabled = dirty and can_write
-        self.save_button.configure(text="Save Changes" if dirty else "No Changes")
+        self.save_button.configure(text=f"Save {self.current_scope.value} PATH")
 
         if save_enabled:
             self.save_button.state(["!disabled"])
@@ -642,19 +792,28 @@ class PathManagerApp:
             self.save_button.state(["disabled"])
 
         self.file_menu.entryconfigure(0, state="normal" if save_enabled else "disabled")
-        self.unsaved_var.set("Unsaved changes" if dirty else "No unsaved changes")
+        self.unsaved_var.set(f"{self.current_scope.value} PATH: unsaved changes" if dirty else "All changes saved")
+        self.table_title_var.set("My PATH folders" if self.current_scope == Scope.USER else "System PATH folders")
+        self.unlock_button.pack_forget()
 
         if self.current_scope == Scope.SYSTEM and not self._is_admin():
-            self.root.title("PATH Manager - System Space")
-            self.scope_note_var.set("System space - administrator required")
+            self.root.title("PATH Manager - System PATH (read-only)")
+            self.scope_note_var.set("All users | Read-only")
+            self.scope_description_var.set("Shared by every account. Inspect freely; unlock editing to change this list.")
             self.scope_badge.configure(background=COLORS["warning_bg"], foreground=COLORS["warning"])
+            self.unlock_button.pack(side="right", padx=(12, 0))
         elif self.current_scope == Scope.SYSTEM:
-            self.root.title("PATH Manager - System Space")
-            self.scope_note_var.set("System space - administrator session")
+            self.root.title("PATH Manager - System PATH")
+            self.scope_note_var.set("All users | Administrator")
+            self.scope_description_var.set("Changes affect every account. System folders are searched before My PATH.")
             self.scope_badge.configure(background=COLORS["surface_alt"], foreground=COLORS["success"])
         else:
-            self.root.title("PATH Manager - User Space")
-            self.scope_note_var.set("User space - current account")
+            self.root.title("PATH Manager - My PATH")
+            self.scope_note_var.set("My PATH | Current account")
+            self.scope_description_var.set(
+                "Only this Windows account. Use for personal tools; System PATH is searched first."
+                + (" Elevated app: this is the account running the app." if self._is_admin() else "")
+            )
             self.scope_badge.configure(background=COLORS["surface_alt"], foreground=COLORS["text"])
 
     def _update_metrics(self) -> None:
@@ -673,7 +832,8 @@ class PathManagerApp:
     def _update_details(self) -> None:
         selected = self.selected_model_indices()
         if not selected:
-            self._set_text(self.detail_text, "No entry selected.")
+            self._set_text(self.detail_text, "Select a folder to see its scope, expanded path, and health.\n\n"
+                           "Double-click an issue in Health to find the affected folder.")
             return
 
         if len(selected) > 1:
@@ -692,7 +852,7 @@ class PathManagerApp:
 
         lines = [
             f"Position: {idx + 1} of {len(self.entries)}",
-            f"Scope: {entry.scope.value}",
+            f"Belongs to: {'All users (System PATH)' if entry.scope == Scope.SYSTEM else 'My PATH (current account)'}",
             f"State: {'Enabled' if entry.enabled else 'Disabled'}",
             f"Health: {self._entry_health(idx)}",
             "",
@@ -763,6 +923,7 @@ class PathManagerApp:
 
         for item in self.issue_tree.get_children():
             self.issue_tree.delete(item)
+        self._set_text(self.issue_detail, "Select an issue for its full explanation. Double-click to locate the folder.")
 
         if not self.current_issues:
             self.health_summary_var.set("No obvious issues found")
@@ -772,13 +933,38 @@ class PathManagerApp:
         infos = sum(1 for issue in self.current_issues if issue.severity != "warning")
         self.health_summary_var.set(f"{warnings} warnings, {infos} notes")
 
-        for issue in self.current_issues:
+        for index, issue in enumerate(self.current_issues):
             self.issue_tree.insert(
                 "",
                 "end",
-                values=(issue.severity.upper(), f"{issue.code}: {issue.message}", issue.path or ""),
+                iid=f"issue:{index}",
+                values=(issue.severity.title(), issue.code.replace("-", " ").title()),
                 tags=(issue.severity,),
             )
+
+    def _selected_issue(self) -> Issue | None:
+        selection = self.issue_tree.selection()
+        if not selection:
+            return None
+        return self.current_issues[int(selection[0].split(":")[1])]
+
+    def _show_issue_details(self) -> None:
+        issue = self._selected_issue()
+        if issue is not None:
+            self._set_text(self.issue_detail, f"{issue.severity.title()}: {issue.message}\n\n"
+                           f"{issue.path or 'Applies to this PATH list.'}")
+
+    def _select_issue_entry(self) -> None:
+        issue = self._selected_issue()
+        if issue is None or issue.path is None:
+            return
+        index = self._find_first_duplicate(issue.path)
+        if index is not None:
+            self.filter_var.set("")
+            self.workspace.select(0)
+            self.tree.selection_set(self._iid_for_index(index))
+            self.tree.see(self._iid_for_index(index))
+            self.notebook.select(1)
 
     def _map_issues_to_entries(self, issues: list[Issue]) -> dict[int, list[Issue]]:
         mapped: dict[int, list[Issue]] = {idx: [] for idx in range(len(self.entries))}
@@ -794,6 +980,8 @@ class PathManagerApp:
         return mapped
 
     def add_entry(self) -> None:
+        if not self._require_editable():
+            return
         result = self._entry_dialog("New PATH entry", "")
         if result is None:
             return
@@ -801,6 +989,8 @@ class PathManagerApp:
         self._add_path_entry(path_value, enabled=enabled)
 
     def _add_path_entry(self, value: str, enabled: bool) -> None:
+        if not self._require_editable():
+            return
         clean = value.strip().strip('"')
         if not clean:
             return
@@ -815,9 +1005,12 @@ class PathManagerApp:
                 return
 
         self.entries.append(self._make_entry(clean, enabled))
+        self.filter_var.set("")
         self._sync_view(f"Added PATH entry", select_indices=[len(self.entries) - 1])
 
     def edit_selected(self) -> None:
+        if not self._require_editable():
+            return
         idx = self.selected_model_index()
         if idx is None:
             return
@@ -832,6 +1025,8 @@ class PathManagerApp:
         self._sync_view("Updated PATH entry", select_indices=[idx])
 
     def delete_selected(self) -> None:
+        if not self._require_editable():
+            return
         selected = self.selected_model_indices()
         if not selected:
             return
@@ -849,6 +1044,8 @@ class PathManagerApp:
         self._sync_view(f"Removed {count} {noun}", select_indices=select_indices)
 
     def toggle_selected(self) -> None:
+        if not self._require_editable():
+            return
         selected = self.selected_model_indices()
         if not selected:
             return
@@ -861,6 +1058,8 @@ class PathManagerApp:
         self._sync_view(f"{state} {len(selected)} PATH entries", select_indices=selected)
 
     def move_selected(self, delta: int) -> None:
+        if not self._require_editable():
+            return
         selected = self.selected_model_indices()
         if not selected:
             return
@@ -881,6 +1080,8 @@ class PathManagerApp:
         self._sync_view("Reordered PATH entries", select_indices=new_indices)
 
     def normalize_entries(self) -> None:
+        if not self._require_editable():
+            return
         changed = 0
         for entry in self.entries:
             clean = entry.path.strip().strip('"')
@@ -891,11 +1092,15 @@ class PathManagerApp:
         self._sync_view(f"Normalized {changed} entries")
 
     def remove_duplicates(self) -> None:
+        if not self._require_editable():
+            return
         unique, removed_paths = self._dedupe_entries(self.entries)
         self.entries = unique
         self._sync_view(f"Removed {len(removed_paths)} duplicate entries")
 
     def remove_missing(self) -> None:
+        if not self._require_editable():
+            return
         before = len(self.entries)
         self.entries = [entry for entry in self.entries if not entry.enabled or entry.exists]
         removed = before - len(self.entries)
@@ -961,6 +1166,8 @@ class PathManagerApp:
         return unique, removed
 
     def apply_safe_fix_pack(self, plan: SafeFixPlan | None = None, skip_confirm: bool = False) -> None:
+        if not self._require_editable():
+            return
         if plan is None:
             plan = self._build_safe_fix_plan()
 
@@ -1002,6 +1209,8 @@ class PathManagerApp:
         return "\n".join(lines)
 
     def move_windows_core_first(self) -> None:
+        if not self._require_editable():
+            return
         updated = self._prioritize_windows_core(self.entries)
         if self._entry_signature(updated) == self._entry_signature(self.entries):
             messagebox.showinfo("Windows core order", "Windows core folders already appear before other enabled entries.")
@@ -1110,7 +1319,8 @@ class PathManagerApp:
 
         lines = [
             f"Scope: {self.current_scope.value} PATH",
-            f"App space: {'System administrator session' if self.current_scope == Scope.SYSTEM else 'User account session'}",
+            f"Affects: {'every account on this computer' if self.current_scope == Scope.SYSTEM else 'only the account running this app'}",
+            "The other PATH scope will not be changed.",
             "",
             f"Editor rows: {len(before_entries)} -> {len(self.entries)}",
             f"Enabled rows: {sum(1 for entry in before_entries if entry.enabled)} -> {sum(1 for entry in self.entries if entry.enabled)}",
@@ -1212,36 +1422,25 @@ class PathManagerApp:
         self.load_scope(force=True)
 
     def preview_effective_path(self) -> None:
-        user_entries = self.entries if self.current_scope == Scope.USER else self.store.read_entries(Scope.USER)
-        system_entries = self.entries if self.current_scope == Scope.SYSTEM else self.store.read_entries(Scope.SYSTEM)
-
-        combined = [entry for entry in system_entries + user_entries if entry.enabled and entry.path.strip()]
-        lines = [
-            "Effective PATH order for new processes",
-            "System scope is listed before User scope.",
-            "",
-        ]
-        for idx, entry in enumerate(combined, start=1):
-            lines.append(f"{idx:>3}. [{entry.scope.value}] {entry.path}")
-
-        self._show_text_dialog("Effective PATH", "\n".join(lines))
+        self._refresh_combined_view()
+        self.workspace.select(1)
 
     def run_command_test(self) -> None:
         command = self.command_var.get().strip()
         if not command:
+            self._set_text(self.tester_output, "Enter a command name to resolve, such as python or git.")
             return
 
-        current_resolution = resolve_command(command, self.entries)
+        try:
+            user_entries, system_entries = self._scope_entries()
+        except OSError as exc:
+            self._set_text(self.tester_output, f"Could not read PATH for command comparison: {exc}")
+            return
         other_scope = Scope.SYSTEM if self.current_scope == Scope.USER else Scope.USER
-        other_entries = self.store.read_entries(other_scope)
+        other_entries = system_entries if self.current_scope == Scope.USER else user_entries
+        current_resolution = resolve_command(command, self.entries)
         other_resolution = resolve_command(command, other_entries)
 
-        if self.current_scope == Scope.USER:
-            user_entries = self.entries
-            system_entries = other_entries
-        else:
-            system_entries = self.entries
-            user_entries = other_entries
         effective_resolution = resolve_command(command, system_entries + user_entries)
         session_winner = quick_find_current(command)
 
@@ -1250,8 +1449,9 @@ class PathManagerApp:
             "",
             f"{self.current_scope.value} winner: {current_resolution.winner or 'No match'}",
             f"{other_scope.value} winner: {other_resolution.winner or 'No match'}",
-            f"Effective winner: {effective_resolution.winner or 'No match'}",
-            f"Current session winner: {session_winner or 'No match'}",
+            f"Combined PATH preview winner: {effective_resolution.winner or 'No match'}",
+            f"This app's inherited environment winner: {session_winner or 'No match'}",
+            "Preview includes unsaved edits. Shell-specific command lookup may differ.",
             "",
         ]
 
